@@ -1,7 +1,7 @@
 {
   "name": "applivery-distribution",
   "description": "Distribute builds using Applivery",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "Danny Gilbert <dgilbert@foreflight.com>",
   "type": "module",
   "private": true,

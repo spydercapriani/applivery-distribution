@@ -58663,13 +58663,13 @@ async function run() {
     const slugSafeBranchName = branchName
         .replace(/[^a-zA-Z0-9-]/g, '-')
         .replace(/^-+|-+$/g, '');
-    const slugName = coreExports.getInput('slug-name') || slugSafeBranchName;
+    const slugName = (coreExports.getInput('slug-name') || slugSafeBranchName).toLowerCase();
     const security = coreExports.getInput('publication-password')
         ? PublicationSecurity.Password
         : PublicationSecurity.Public;
     const buildPath = coreExports.getInput('build-path');
     const changelog = coreExports.getInput('changelog');
-    const tags = coreExports.getInput('tags')?.split(',') || null;
+    const tags = coreExports.getInput('tags')?.split(',') || [];
     // Validate the build path
     const buildFile = require$$1.statSync(buildPath);
     if (!buildFile.isFile()) {
@@ -58677,37 +58677,6 @@ async function run() {
             `Build file does not exist: ${buildPath}` +
             ansiStyles.red.close);
         return;
-    }
-    let publicationPayload;
-    if (tags && tags.length > 0) {
-        // If tags are provided, create a publication with the tags
-        publicationPayload = {
-            slug: slugName,
-            visibility: PublicationVisibility.Unlisted,
-            security: security,
-            password: publicationPassword || '',
-            filter: {
-                type: PublicationFilterType.Tag,
-                value: tags.join(',')
-            },
-            showDevInfo: true,
-            showHistory: true
-        };
-    }
-    else {
-        // Default publication creation request payload should one not already exist for the branch name or slug name
-        publicationPayload = {
-            slug: slugName,
-            visibility: PublicationVisibility.Unlisted,
-            security: security,
-            password: publicationPassword || '',
-            filter: {
-                type: PublicationFilterType.GitBranch,
-                value: branchName
-            },
-            showDevInfo: true,
-            showHistory: true
-        };
     }
     // Validate the provided slug name can be used as a slug
     const slugNameRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]$/;
@@ -58718,56 +58687,13 @@ async function run() {
         return;
     }
     try {
-        // Look for existing publications tied to the slug name
-        let publication = await fetchPublications(apiKey, baseUrl, {
-            slug: slugName
-        }).then((publications) => {
-            return publications
-                .map((publication) => {
-                return {
-                    id: publication.id,
-                    slug: publication.slug,
-                    distributionUrl: publication.distributionUrl,
-                    createdAt: publication.createdAt,
-                    updatedAt: publication.updatedAt
-                };
-            })
-                .find((publication) => publication.slug === slugName);
-        });
-        if (!publication) {
-            coreExports.info(`No publication found for slug: '${slugName}', will create a new publication...`);
-            publication = await createPublication(apiKey, baseUrl, publicationPayload);
-        }
-        coreExports.setOutput('publication-id', publication.id);
-        coreExports.setOutput('publication-slug', publication.slug);
-        coreExports.setOutput('publication-distribution-url', publication.distributionUrl);
-        const qrCode = await libExports.toString(publication.distributionUrl);
-        coreExports.setOutput('qr-code', qrCode);
-        // Create the Summary Markdown content
-        coreExports.summary
-            .addRaw(`## [Install App](${publication.distributionUrl})`)
-            .addBreak()
-            .addRaw(':iphone: Scan this code to install the app on your device.')
-            .addBreak()
-            .addRaw('\n```\n' + qrCode + '\n```\n');
-        if (publicationPassword) {
-            coreExports.summary
-                .addRaw(':unlock: Installation Password:')
-                .addCodeBlock(publicationPassword, 'text');
-        }
-        coreExports.summary.addSeparator();
-        // Write the Summary Markdown
-        coreExports.summary.write();
-        if (coreExports.isDebug()) {
-            console.log(coreExports.summary.stringify());
-        }
         // Upload the build to Applivery
         let uploadedBuild = await uploadBuild(apiKey, baseUploadsUrl, buildPath, {
             versionName: branchName,
             buildPlatform: BuildPlatform.iOS,
             tags: tags,
             changelog: changelog,
-            notifyMessage: `A new build has been uploaded to Applivery for ${branchName} at ${publication.distributionUrl}`,
+            notifyMessage: `A new build has been uploaded to Applivery for ${branchName}`,
             notifyLanguage: NotifyLanguage.English,
             deployer: getDeployerInfo(githubExports.context)
         });
@@ -58798,6 +58724,80 @@ async function run() {
         coreExports.debug(ansiStyles.cyan.open +
             `Uploaded build:\n${JSON.stringify(uploadedBuild, null, 2)}` +
             ansiStyles.cyan.close);
+        // Look for existing publications tied to the slug name
+        let publication = await fetchPublications(apiKey, baseUrl, {
+            slug: slugName
+        }).then((publications) => {
+            return publications
+                .map((publication) => {
+                return {
+                    id: publication.id,
+                    slug: publication.slug,
+                    distributionUrl: publication.distributionUrl,
+                    createdAt: publication.createdAt,
+                    updatedAt: publication.updatedAt
+                };
+            })
+                .find((publication) => publication.slug.toLowerCase() === slugName);
+        });
+        if (!publication) {
+            coreExports.info(`No publication found for slug: '${slugName}', will create a new publication...`);
+            let publicationPayload;
+            if (tags.length > 0) {
+                // Create a publication filtered by tags if tags are provided
+                publicationPayload = {
+                    slug: slugName,
+                    visibility: PublicationVisibility.Unlisted,
+                    security: security,
+                    password: publicationPassword || '',
+                    filter: {
+                        type: PublicationFilterType.Tag,
+                        value: tags.join(',')
+                    },
+                    showDevInfo: true,
+                    showHistory: true
+                };
+            }
+            else {
+                // Default publication will be filtered by branch name
+                publicationPayload = {
+                    slug: slugName,
+                    visibility: PublicationVisibility.Unlisted,
+                    security: security,
+                    password: publicationPassword || '',
+                    filter: {
+                        type: PublicationFilterType.GitBranch,
+                        value: branchName
+                    },
+                    showDevInfo: true,
+                    showHistory: true
+                };
+            }
+            publication = await createPublication(apiKey, baseUrl, publicationPayload);
+        }
+        coreExports.setOutput('publication-id', publication.id);
+        coreExports.setOutput('publication-slug', publication.slug);
+        coreExports.setOutput('publication-distribution-url', publication.distributionUrl);
+        const qrCode = await libExports.toString(publication.distributionUrl);
+        coreExports.setOutput('qr-code', qrCode);
+        // Create the Summary Markdown content
+        coreExports.summary
+            .addRaw(`## [Install App](${publication.distributionUrl})`)
+            .addBreak()
+            .addRaw(':iphone: Scan this code to install the app on your device.')
+            .addBreak()
+            .addRaw('\n```\n' + qrCode + '\n```\n');
+        if (publicationPassword) {
+            coreExports.summary
+                .addRaw(':unlock: Installation Password:')
+                .addCodeBlock(publicationPassword, 'text');
+        }
+        coreExports.summary.addSeparator();
+        // Write the Summary Markdown
+        coreExports.summary.write();
+        if (coreExports.isDebug()) {
+            console.log(coreExports.summary.stringify());
+        }
         coreExports.notice(ansiStyles.green.open +
             `Build uploaded to ${publication.distributionUrl}` +
             ansiStyles.green.close);
@@ -58815,6 +58815,7 @@ async function run() {
         else {
             coreExports.error(`Unexpected error: ${error}`);
         }
+        coreExports.setFailed(`${error}`);
     }
 }
 

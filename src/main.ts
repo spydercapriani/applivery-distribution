@@ -34,13 +34,15 @@ export async function run(): Promise<void> {
   const slugSafeBranchName = branchName
     .replace(/[^a-zA-Z0-9-]/g, '-')
     .replace(/^-+|-+$/g, '')
-  const slugName = core.getInput('slug-name') || slugSafeBranchName
+  const slugName = (
+    core.getInput('slug-name') || slugSafeBranchName
+  ).toLowerCase()
   const security = core.getInput('publication-password')
     ? Applivery.PublicationSecurity.Password
     : Applivery.PublicationSecurity.Public
   const buildPath = core.getInput('build-path')
   const changelog = core.getInput('changelog')
-  const tags = core.getInput('tags')?.split(',') || null
+  const tags = core.getInput('tags')?.split(',') || []
 
   // Validate the build path
   const buildFile = fs.statSync(buildPath)
@@ -51,37 +53,6 @@ export async function run(): Promise<void> {
         styles.red.close
     )
     return
-  }
-
-  let publicationPayload: CreatePublicationRequest
-  if (tags && tags.length > 0) {
-    // If tags are provided, create a publication with the tags
-    publicationPayload = {
-      slug: slugName,
-      visibility: Applivery.PublicationVisibility.Unlisted,
-      security: security,
-      password: publicationPassword || '',
-      filter: {
-        type: Applivery.PublicationFilterType.Tag,
-        value: tags.join(',')
-      },
-      showDevInfo: true,
-      showHistory: true
-    }
-  } else {
-    // Default publication creation request payload should one not already exist for the branch name or slug name
-    publicationPayload = {
-      slug: slugName,
-      visibility: Applivery.PublicationVisibility.Unlisted,
-      security: security,
-      password: publicationPassword || '',
-      filter: {
-        type: Applivery.PublicationFilterType.GitBranch,
-        value: branchName
-      },
-      showDevInfo: true,
-      showHistory: true
-    }
   }
 
   // Validate the provided slug name can be used as a slug
@@ -96,60 +67,6 @@ export async function run(): Promise<void> {
   }
 
   try {
-    // Look for existing publications tied to the slug name
-    let publication = await Applivery.fetchPublications(apiKey, baseUrl, {
-      slug: slugName
-    }).then((publications) => {
-      return publications
-        .map((publication) => {
-          return {
-            id: publication.id,
-            slug: publication.slug,
-            distributionUrl: publication.distributionUrl,
-            createdAt: publication.createdAt,
-            updatedAt: publication.updatedAt
-          }
-        })
-        .find((publication) => publication.slug === slugName)
-    })
-
-    if (!publication) {
-      core.info(
-        `No publication found for slug: '${slugName}', will create a new publication...`
-      )
-      publication = await Applivery.createPublication(
-        apiKey,
-        baseUrl,
-        publicationPayload
-      )
-    }
-
-    core.setOutput('publication-id', publication.id)
-    core.setOutput('publication-slug', publication.slug)
-    core.setOutput('publication-distribution-url', publication.distributionUrl)
-
-    const qrCode = await QRCode.toString(publication.distributionUrl)
-    core.setOutput('qr-code', qrCode)
-    // Create the Summary Markdown content
-    core.summary
-      .addRaw(`## [Install App](${publication.distributionUrl})`)
-      .addBreak()
-      .addRaw(':iphone: Scan this code to install the app on your device.')
-      .addBreak()
-      .addRaw('\n```\n' + qrCode + '\n```\n')
-    if (publicationPassword) {
-      core.summary
-        .addRaw(':unlock: Installation Password:')
-        .addCodeBlock(publicationPassword, 'text')
-    }
-    core.summary.addSeparator()
-    // Write the Summary Markdown
-    core.summary.write()
-
-    if (core.isDebug()) {
-      console.log(core.summary.stringify())
-    }
-
     // Upload the build to Applivery
     let uploadedBuild = await Applivery.uploadBuild(
       apiKey,
@@ -160,7 +77,7 @@ export async function run(): Promise<void> {
         buildPlatform: BuildPlatform.iOS,
         tags: tags,
         changelog: changelog,
-        notifyMessage: `A new build has been uploaded to Applivery for ${branchName} at ${publication.distributionUrl}`,
+        notifyMessage: `A new build has been uploaded to Applivery for ${branchName}`,
         notifyLanguage: NotifyLanguage.English,
         deployer: Utils.getDeployerInfo(github.context)
       }
@@ -207,6 +124,93 @@ export async function run(): Promise<void> {
         `Uploaded build:\n${JSON.stringify(uploadedBuild, null, 2)}` +
         styles.cyan.close
     )
+
+    // Look for existing publications tied to the slug name
+    let publication = await Applivery.fetchPublications(apiKey, baseUrl, {
+      slug: slugName
+    }).then((publications) => {
+      return publications
+        .map((publication) => {
+          return {
+            id: publication.id,
+            slug: publication.slug,
+            distributionUrl: publication.distributionUrl,
+            createdAt: publication.createdAt,
+            updatedAt: publication.updatedAt
+          }
+        })
+        .find((publication) => publication.slug.toLowerCase() === slugName)
+    })
+
+    if (!publication) {
+      core.info(
+        `No publication found for slug: '${slugName}', will create a new publication...`
+      )
+
+      let publicationPayload: CreatePublicationRequest
+      if (tags.length > 0) {
+        // Create a publication filtered by tags if tags are provided
+        publicationPayload = {
+          slug: slugName,
+          visibility: Applivery.PublicationVisibility.Unlisted,
+          security: security,
+          password: publicationPassword || '',
+          filter: {
+            type: Applivery.PublicationFilterType.Tag,
+            value: tags.join(',')
+          },
+          showDevInfo: true,
+          showHistory: true
+        }
+      } else {
+        // Default publication will be filtered by branch name
+        publicationPayload = {
+          slug: slugName,
+          visibility: Applivery.PublicationVisibility.Unlisted,
+          security: security,
+          password: publicationPassword || '',
+          filter: {
+            type: Applivery.PublicationFilterType.GitBranch,
+            value: branchName
+          },
+          showDevInfo: true,
+          showHistory: true
+        }
+      }
+
+      publication = await Applivery.createPublication(
+        apiKey,
+        baseUrl,
+        publicationPayload
+      )
+    }
+
+    core.setOutput('publication-id', publication.id)
+    core.setOutput('publication-slug', publication.slug)
+    core.setOutput('publication-distribution-url', publication.distributionUrl)
+
+    const qrCode = await QRCode.toString(publication.distributionUrl)
+    core.setOutput('qr-code', qrCode)
+    // Create the Summary Markdown content
+    core.summary
+      .addRaw(`## [Install App](${publication.distributionUrl})`)
+      .addBreak()
+      .addRaw(':iphone: Scan this code to install the app on your device.')
+      .addBreak()
+      .addRaw('\n```\n' + qrCode + '\n```\n')
+    if (publicationPassword) {
+      core.summary
+        .addRaw(':unlock: Installation Password:')
+        .addCodeBlock(publicationPassword, 'text')
+    }
+    core.summary.addSeparator()
+    // Write the Summary Markdown
+    core.summary.write()
+
+    if (core.isDebug()) {
+      console.log(core.summary.stringify())
+    }
+
     core.notice(
       styles.green.open +
         `Build uploaded to ${publication.distributionUrl}` +
@@ -222,5 +226,6 @@ export async function run(): Promise<void> {
     } else {
       core.error(`Unexpected error: ${error}`)
     }
+    core.setFailed(`${error}`)
   }
 }
