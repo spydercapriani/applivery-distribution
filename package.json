@@ -47,7 +47,7 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "@eslint/compat": "^1.4.0",
+    "@eslint/compat": "^2.0.2",
     "@github/local-action": "^6.0.0",
     "@jest/globals": "^30.2.0",
     "@rollup/plugin-commonjs": "^28.0.6",
